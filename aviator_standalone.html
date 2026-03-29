@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentic Aviator Pro - Standalone</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
+    <style>
+        body { background-color: #0a0a0a; margin: 0; font-family: sans-serif; color: white; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+        const { motion, AnimatePresence } = FramerMotion;
+
+        // --- Constants ---
+        const INITIAL_BALANCE = 3000.00;
+        const COUNTDOWN_DURATION = 10;
+        const LOCKOUT_TIME = 3;
+        const PLANE_IMAGE_URL = "https://static.spribe.co/games/aviator/assets/plane.png";
+
+        function App() {
+            const [balance, setBalance] = useState(INITIAL_BALANCE);
+            const [gameState, setGameState] = useState('WAITING');
+            const [multiplier, setMultiplier] = useState(1.00);
+            const [countdown, setCountdown] = useState(COUNTDOWN_DURATION);
+            const [history, setHistory] = useState([1.24, 4.56, 1.02, 12.45, 2.33, 1.88, 5.40]);
+            const [cashOutPopup, setCashOutPopup] = useState(null);
+
+            const [bet1, setBet1] = useState({ amount: 10.00, isPlaced: false, isCashedOut: false, payout: 0 });
+            const [bet2, setBet2] = useState({ amount: 10.00, isPlaced: false, isCashedOut: false, payout: 0 });
+
+            const canvasRef = useRef(null);
+            const gameLoopRef = useRef(null);
+            const startTimeRef = useRef(0);
+            const crashPointRef = useRef(1.00);
+            const planeImgRef = useRef(null);
+            const offsetRef = useRef(0);
+
+            useEffect(() => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.src = PLANE_IMAGE_URL;
+                img.onload = () => { planeImgRef.current = img; };
+            }, []);
+
+            const generateCrashPoint = () => {
+                const r = Math.random();
+                if (r < 0.05) return 1.00;
+                return parseFloat((1 / (1 - Math.random() * 0.99)).toFixed(2));
+            };
+
+            const startGame = () => {
+                crashPointRef.current = generateCrashPoint();
+                setGameState('IN_FLIGHT');
+                setMultiplier(1.00);
+                startTimeRef.current = Date.now();
+                setCountdown(0);
+            };
+
+            const resetGame = () => {
+                setGameState('WAITING');
+                setCountdown(COUNTDOWN_DURATION);
+                setMultiplier(1.00);
+                setBet1(prev => ({ ...prev, isPlaced: false, isCashedOut: false, payout: 0 }));
+                setBet2(prev => ({ ...prev, isPlaced: false, isCashedOut: false, payout: 0 }));
+            };
+
+            useEffect(() => {
+                if (gameState === 'IN_FLIGHT') {
+                    const update = () => {
+                        const elapsed = (Date.now() - startTimeRef.current) / 1000;
+                        const currentMult = Math.pow(Math.E, 0.12 * elapsed);
+                        
+                        if (currentMult >= crashPointRef.current) {
+                            setGameState('CRASHED');
+                            setHistory(prev => [parseFloat(crashPointRef.current.toFixed(2)), ...prev].slice(0, 10));
+                            setTimeout(resetGame, 3000);
+                            return;
+                        }
+
+                        setMultiplier(currentMult);
+                        gameLoopRef.current = requestAnimationFrame(update);
+                    };
+                    gameLoopRef.current = requestAnimationFrame(update);
+                } else {
+                    if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+                }
+                return () => { if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current); };
+            }, [gameState]);
+
+            useEffect(() => {
+                let timer;
+                if (gameState === 'WAITING' && countdown > 0) {
+                    timer = setInterval(() => {
+                        setCountdown(prev => {
+                            if (prev <= 0.1) { startGame(); return 0; }
+                            return parseFloat((prev - 0.1).toFixed(1));
+                        });
+                    }, 100);
+                }
+                return () => clearInterval(timer);
+            }, [gameState, countdown]);
+
+            const handlePlaceBet = (panel) => {
+                if (gameState !== 'WAITING' || countdown <= LOCKOUT_TIME) return;
+                const bet = panel === 1 ? bet1 : bet2;
+                if (balance < bet.amount) return;
+                setBalance(prev => prev - bet.amount);
+                if (panel === 1) setBet1(prev => ({ ...prev, isPlaced: true }));
+                else setBet2(prev => ({ ...prev, isPlaced: true }));
+            };
+
+            const handleCashOut = (panel) => {
+                if (gameState !== 'IN_FLIGHT') return;
+                const bet = panel === 1 ? bet1 : bet2;
+                if (!bet.isPlaced || bet.isCashedOut) return;
+                const winAmount = bet.amount * multiplier;
+                setBalance(prev => prev + winAmount);
+                setCashOutPopup({ amount: winAmount, mult: multiplier });
+                if (panel === 1) setBet1(prev => ({ ...prev, isCashedOut: true, payout: winAmount }));
+                else setBet2(prev => ({ ...prev, isCashedOut: true, payout: winAmount }));
+                setTimeout(() => setCashOutPopup(null), 3000);
+            };
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
+                let animationFrame;
+                const render = () => {
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    ctx.clearRect(0, 0, w, h);
+
+                    if (gameState === 'IN_FLIGHT') {
+                        offsetRef.current = (offsetRef.current + 2) % 50;
+                    }
+
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+                    ctx.lineWidth = 1;
+                    for (let i = -offsetRef.current; i < w + 50; i += 50) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke(); }
+                    for (let i = offsetRef.current; i < h + 50; i += 50) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke(); }
+
+                    if (gameState === 'IN_FLIGHT' || gameState === 'CRASHED') {
+                        const elapsed = (Date.now() - startTimeRef.current) / 1000;
+                        let x, y;
+                        const takeoffDuration = 3;
+                        const progress = Math.min(elapsed / takeoffDuration, 1);
+                        const targetX = w * 0.75;
+                        const targetY = h * 0.55;
+                        x = 50 + (targetX - 50) * progress;
+                        y = (h - 50) - (h - 50 - targetY) * Math.pow(progress, 1.2);
+
+                        if (progress >= 1) {
+                            x += Math.sin(elapsed * 1.5) * 5;
+                            y += Math.cos(elapsed * 1.2) * 10;
+                        }
+
+                        const angle = progress < 1 ? -Math.PI / 8 : -Math.PI / 20 + Math.sin(elapsed) * 0.03;
+
+                        if (planeImgRef.current && planeImgRef.current.complete) {
+                            ctx.save();
+                            ctx.translate(x, y);
+                            ctx.rotate(angle);
+                            ctx.drawImage(planeImgRef.current, -60, -30, 120, 60);
+                            ctx.restore();
+                        } else {
+                            // Fallback Shape
+                            ctx.save();
+                            ctx.translate(x, y);
+                            ctx.rotate(angle);
+                            ctx.fillStyle = '#e11d48';
+                            ctx.shadowBlur = 15;
+                            ctx.shadowColor = 'rgba(225, 29, 72, 0.5)';
+                            ctx.beginPath(); ctx.ellipse(0, 0, 50, 15, 0, 0, Math.PI * 2); ctx.fill();
+                            ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(-30, -35); ctx.lineTo(0, -35); ctx.lineTo(20, 0); ctx.fill();
+                            ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(-30, 35); ctx.lineTo(0, 35); ctx.lineTo(20, 0); ctx.fill();
+                            ctx.beginPath(); ctx.moveTo(-40, 0); ctx.lineTo(-55, -20); ctx.lineTo(-45, -20); ctx.lineTo(-30, 0); ctx.fill();
+                            ctx.restore();
+                        }
+                    }
+                    animationFrame = requestAnimationFrame(render);
+                };
+                render();
+                return () => cancelAnimationFrame(animationFrame);
+            }, [gameState, multiplier]);
+
+            return (
+                <div className="min-h-screen flex flex-col overflow-hidden">
+                    <header className="flex items-center justify-between px-4 py-3 bg-[#141414] border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                            <span className="font-black italic text-2xl tracking-tighter text-rose-500 uppercase">Aviator</span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <div className="bg-[#000] px-4 py-1.5 rounded-full border border-emerald-500/30">
+                                <span className="text-emerald-400 font-bold">{balance.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="flex-1 flex flex-col lg:flex-row p-2 gap-2 max-w-[1400px] mx-auto w-full">
+                        <div className="flex-1 flex flex-col gap-2">
+                            <div className="bg-[#141414] p-2 rounded-xl border border-white/5 flex items-center gap-2 overflow-x-auto no-scrollbar">
+                                {history.map((val, i) => (
+                                    <span key={i} className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${val > 2 ? 'bg-violet-500/20 text-violet-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                                        {val.toFixed(2)}x
+                                    </span>
+                                ))}
+                            </div>
+
+                            <div className="relative flex-1 bg-[#141414] rounded-2xl border border-white/5 overflow-hidden min-h-[300px]">
+                                <canvas ref={canvasRef} width={800} height={500} className="w-full h-full object-cover" />
+                                <div className="absolute inset-0 flex flex-col items-center pt-12 pointer-events-none">
+                                    {gameState === 'WAITING' ? (
+                                        <div className="text-center">
+                                            <div className="text-gray-500 text-sm font-bold uppercase mb-2">Next Round In</div>
+                                            <div className="text-6xl font-black italic text-white">{countdown.toFixed(1)}s</div>
+                                        </div>
+                                    ) : gameState === 'CRASHED' ? (
+                                        <div className="text-center animate-pulse">
+                                            <div className="text-rose-500 text-4xl font-black italic uppercase mb-1">Flew Away!</div>
+                                            <div className="text-7xl font-black italic text-rose-500">{multiplier.toFixed(2)}x</div>
+                                        </div>
+                                    ) : (
+                                        <div className="text-center">
+                                            <div className="text-8xl font-black italic text-white">{multiplier.toFixed(2)}x</div>
+                                        </div>
+                                    )}
+                                </div>
+                                <AnimatePresence>
+                                    {cashOutPopup && (
+                                        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute top-10 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-6 py-3 rounded-2xl shadow-lg flex flex-col items-center z-50">
+                                            <div className="text-xs font-bold uppercase opacity-80">You Cashed Out!</div>
+                                            <div className="text-2xl font-black italic">{cashOutPopup.mult.toFixed(2)}x</div>
+                                            <div className="text-sm font-bold mt-1">+{cashOutPopup.amount.toFixed(2)} USD</div>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                <BetPanel bet={bet1} setBet={setBet1} onPlace={() => handlePlaceBet(1)} onCashOut={() => handleCashOut(1)} gameState={gameState} countdown={countdown} multiplier={multiplier} />
+                                <BetPanel bet={bet2} setBet={setBet2} onPlace={() => handlePlaceBet(2)} onCashOut={() => handleCashOut(2)} gameState={gameState} countdown={countdown} multiplier={multiplier} />
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        }
+
+        function BetPanel({ bet, setBet, onPlace, onCashOut, gameState, countdown, multiplier }) {
+            const isLockout = gameState === 'WAITING' && countdown <= LOCKOUT_TIME;
+            const canBet = gameState === 'WAITING' && !bet.isPlaced && !isLockout;
+            const canCashOut = gameState === 'IN_FLIGHT' && bet.isPlaced && !bet.isCashedOut;
+
+            return (
+                <div className="bg-[#1b1b1b] p-4 rounded-2xl border border-white/5 flex flex-col gap-3">
+                    <div className="flex gap-3">
+                        <div className="flex-1 flex flex-col gap-2">
+                            <div className="bg-black/40 rounded-xl p-1 flex items-center justify-between border border-white/5">
+                                <button onClick={() => setBet(prev => ({ ...prev, amount: Math.max(0.1, prev.amount - 1) }))} className="w-8 h-8 text-gray-400">-</button>
+                                <input type="number" value={bet.amount} onChange={(e) => setBet(prev => ({ ...prev, amount: parseFloat(e.target.value) || 0 }))} className="bg-transparent text-center font-bold text-sm w-full outline-none" />
+                                <button onClick={() => setBet(prev => ({ ...prev, amount: prev.amount + 1 }))} className="w-8 h-8 text-gray-400">+</button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-1">
+                                {[1.00, 2.00, 5.00, 10.00].map(amt => (
+                                    <button key={amt} onClick={() => setBet(prev => ({ ...prev, amount: amt }))} className="bg-black/20 text-[10px] font-bold py-1.5 rounded-lg border border-white/5">{amt.toFixed(2)}</button>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="flex-1">
+                            {canCashOut ? (
+                                <button onClick={onCashOut} className="w-full h-full bg-orange-500 rounded-2xl flex flex-col items-center justify-center shadow-lg">
+                                    <span className="text-xs font-black uppercase italic">Cash Out</span>
+                                    <span className="text-xl font-black italic">{(bet.amount * multiplier).toFixed(2)} USD</span>
+                                </button>
+                            ) : bet.isPlaced && !bet.isCashedOut && gameState === 'IN_FLIGHT' ? (
+                                <div className="w-full h-full bg-orange-500/50 rounded-2xl flex flex-col items-center justify-center cursor-not-allowed">
+                                    <span className="text-xs font-black uppercase italic opacity-50">Waiting...</span>
+                                </div>
+                            ) : bet.isPlaced && gameState === 'WAITING' ? (
+                                <div className="w-full h-full bg-rose-500/20 border border-rose-500/50 rounded-2xl flex flex-col items-center justify-center">
+                                    <span className="text-xs font-black uppercase italic text-rose-500">Bet Placed</span>
+                                </div>
+                            ) : (
+                                <button disabled={!canBet} onClick={onPlace} className={`w-full h-full rounded-2xl flex flex-col items-center justify-center ${canBet ? 'bg-emerald-500' : 'bg-gray-700 opacity-50'}`}>
+                                    <span className="text-xl font-black italic uppercase">Bet</span>
+                                    <span className="text-xs font-bold">{bet.amount.toFixed(2)} USD</span>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Aviator Game - Standalone</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0a0a0a; color: white; margin: 0; overflow: hidden; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        canvas { image-rendering: crisp-edges; }
+        @keyframes pulse-red { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+        .animate-pulse-red { animation: pulse-red 1s infinite; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/javascript">
+        const { useState, useEffect, useRef, useMemo } = React;
+        const { motion, AnimatePresence } = FramerMotion;
+
+        const INITIAL_BALANCE = 3000.00;
+        const COUNTDOWN_DURATION = 5;
+        const LOCKOUT_TIME = 3;
+        const PLANE_IMAGE_URL = "https://static.vecteezy.com/system/resources/previews/050/024/396/non_2x/3d-cartoon-happy-blue-and-yellow-jet-fighter-military-machine-illustration-for-children-vector.jpg";
+
+        function App() {
+            const [balance, setBalance] = useState(INITIAL_BALANCE);
+            const [gameState, setGameState] = useState('WAITING');
+            const [multiplier, setMultiplier] = useState(1.00);
+            const [countdown, setCountdown] = useState(COUNTDOWN_DURATION);
+            const [history, setHistory] = useState([1.24, 4.56, 1.02, 12.45, 2.33, 1.88, 5.40]);
+            const [cashOutPopup, setCashOutPopup] = useState(null);
+            const [shake, setShake] = useState(false);
+
+            const [bet1, setBet1] = useState({ amount: 10.00, isPlaced: false, isCashedOut: false, payout: 0, autoCashOut: 2.00, isAutoBet: false, isAutoCashOut: false });
+            const [bet2, setBet2] = useState({ amount: 10.00, isPlaced: false, isCashedOut: false, payout: 0, autoCashOut: 2.00, isAutoBet: false, isAutoCashOut: false });
+
+            const canvasRef = useRef(null);
+            const particlesRef = useRef([]);
+            const cloudsRef = useRef([]);
+            const startTimeRef = useRef(0);
+            const crashPointRef = useRef(1.00);
+            const crashTimeRef = useRef(0);
+            const processedCrashRef = useRef(false);
+            const planeImgRef = useRef(null);
+            const offsetRef = useRef(0);
+            const cashedOutRef1 = useRef(false);
+            const cashedOutRef2 = useRef(false);
+            const betRef1 = useRef(bet1);
+            const betRef2 = useRef(bet2);
+
+            useEffect(() => { betRef1.current = bet1; }, [bet1]);
+            useEffect(() => { betRef2.current = bet2; }, [bet2]);
+
+            useEffect(() => {
+                const img = new Image();
+                // Removing crossOrigin as it might be causing CORS issues with pngegg
+                // Since we only draw to canvas and don't read pixels, a tainted canvas is fine.
+                img.src = PLANE_IMAGE_URL;
+                img.onload = () => { 
+                    planeImgRef.current = img; 
+                };
+                img.onerror = () => {
+                    console.error("Failed to load plane image. Using realistic fallback.");
+                };
+            }, []);
+
+            const generateCrashPoint = () => {
+                const r = Math.random();
+                if (r < 0.05) return 1.00;
+                return parseFloat((1 / (1 - Math.random() * 0.99)).toFixed(2));
+            };
+
+            const startGame = () => {
+                if (gameState !== 'WAITING') return;
+                crashPointRef.current = generateCrashPoint();
+                processedCrashRef.current = false;
+                crashTimeRef.current = 0;
+                cashedOutRef1.current = false;
+                cashedOutRef2.current = false;
+                setGameState('IN_FLIGHT');
+                setMultiplier(1.00);
+                startTimeRef.current = Date.now();
+                setCountdown(0);
+            };
+
+            const resetGame = () => {
+                setGameState('WAITING');
+                setCountdown(COUNTDOWN_DURATION);
+                setMultiplier(1.00);
+                cashedOutRef1.current = false;
+                cashedOutRef2.current = false;
+                
+                setBet1(prev => {
+                    if (prev.isAutoBet && balance >= prev.amount) {
+                        setBalance(b => b - prev.amount);
+                        return { ...prev, isPlaced: true, isCashedOut: false, payout: 0 };
+                    }
+                    return { ...prev, isPlaced: false, isCashedOut: false, payout: 0 };
+                });
+
+                setBet2(prev => {
+                    if (prev.isAutoBet && balance >= prev.amount) {
+                        setBalance(b => b - prev.amount);
+                        return { ...prev, isPlaced: true, isCashedOut: false, payout: 0 };
+                    }
+                    return { ...prev, isPlaced: false, isCashedOut: false, payout: 0 };
+                });
+            };
+
+            useEffect(() => {
+                let animationFrame;
+                if (gameState === 'IN_FLIGHT') {
+                    const update = () => {
+                        if (gameState !== 'IN_FLIGHT') return;
+                        const elapsed = (Date.now() - startTimeRef.current) / 1000;
+                        const currentMult = Math.pow(Math.E, 0.12 * elapsed);
+                        
+                        if (currentMult >= crashPointRef.current && !processedCrashRef.current) {
+                            processedCrashRef.current = true;
+                            crashTimeRef.current = Date.now();
+                            setGameState('CRASHED');
+                            setMultiplier(crashPointRef.current);
+                            setHistory(prev => [parseFloat(crashPointRef.current.toFixed(2)), ...prev].slice(0, 10));
+                            setShake(true);
+                            setTimeout(() => setShake(false), 500);
+                            setTimeout(resetGame, 3000);
+                            return;
+                        }
+
+                        setMultiplier(currentMult);
+
+                        const b1 = betRef1.current;
+                        const b2 = betRef2.current;
+
+                        if (b1.isPlaced && !cashedOutRef1.current && b1.isAutoCashOut && b1.autoCashOut && currentMult >= b1.autoCashOut) {
+                            handleCashOut(1, currentMult);
+                        }
+                        if (b2.isPlaced && !cashedOutRef2.current && b2.isAutoCashOut && b2.autoCashOut && currentMult >= b2.autoCashOut) {
+                            handleCashOut(2, currentMult);
+                        }
+
+                        animationFrame = requestAnimationFrame(update);
+                    };
+                    animationFrame = requestAnimationFrame(update);
+                }
+                return () => animationFrame && cancelAnimationFrame(animationFrame);
+            }, [gameState]);
+
+            useEffect(() => {
+                let timer;
+                if (gameState === 'WAITING' && countdown > 0) {
+                    timer = setInterval(() => {
+                        setCountdown(prev => {
+                            if (prev <= 0.1) {
+                                startGame();
+                                return 0;
+                            }
+                            return parseFloat((prev - 0.1).toFixed(1));
+                        });
+                    }, 100);
+                }
+                return () => clearInterval(timer);
+            }, [gameState, countdown]);
+
+            const handlePlaceBet = (panel) => {
+                if (gameState !== 'WAITING' || countdown <= LOCKOUT_TIME) return;
+                const bet = panel === 1 ? bet1 : bet2;
+                if (balance < bet.amount) return;
+                setBalance(prev => prev - bet.amount);
+                if (panel === 1) setBet1(prev => ({ ...prev, isPlaced: true }));
+                else setBet2(prev => ({ ...prev, isPlaced: true }));
+            };
+
+            const handleCashOut = (panel, forcedMult) => {
+                const isCashedOutRef = panel === 1 ? cashedOutRef1 : cashedOutRef2;
+                const bet = panel === 1 ? betRef1.current : betRef2.current;
+                const setBet = panel === 1 ? setBet1 : setBet2;
+
+                if (gameState !== 'IN_FLIGHT' || isCashedOutRef.current || !bet.isPlaced || bet.isCashedOut) return;
+                
+                isCashedOutRef.current = true;
+                const currentMultiplier = forcedMult || multiplier;
+                const winAmount = bet.amount * currentMultiplier;
+
+                setBalance(prev => prev + winAmount);
+                setCashOutPopup({ amount: winAmount, mult: currentMultiplier });
+                setBet(prev => ({ ...prev, isCashedOut: true, payout: winAmount }));
+
+                setTimeout(() => setCashOutPopup(null), 3000);
+            };
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
+
+                if (cloudsRef.current.length === 0) {
+                    cloudsRef.current = Array.from({ length: 8 }, () => ({
+                        x: Math.random() * canvas.width,
+                        y: Math.random() * canvas.height * 0.8,
+                        scale: 0.5 + Math.random() * 1.5,
+                        speed: 0.2 + Math.random() * 0.5
+                    }));
+                }
+
+                let animationFrame;
+                const trail = [];
+
+                const drawCloud = (ctx, x, y, scale) => {
+                    ctx.save();
+                    ctx.translate(x, y);
+                    ctx.scale(scale, scale);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 20, 0, Math.PI * 2);
+                    ctx.arc(15, -10, 25, 0, Math.PI * 2);
+                    ctx.arc(35, 0, 20, 0, Math.PI * 2);
+                    ctx.arc(15, 10, 20, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                };
+
+                const render = () => {
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    
+                    const skyGradient = ctx.createLinearGradient(0, 0, 0, h);
+                    skyGradient.addColorStop(0, '#0ea5e9');
+                    skyGradient.addColorStop(1, '#38bdf8');
+                    ctx.fillStyle = skyGradient;
+                    ctx.fillRect(0, 0, w, h);
+
+                    ctx.save();
+                    if (shake) ctx.translate((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
+
+                    cloudsRef.current.forEach(cloud => {
+                        drawCloud(ctx, cloud.x, cloud.y, cloud.scale);
+                        if (gameState === 'IN_FLIGHT') {
+                            cloud.x -= cloud.speed * (multiplier * 2);
+                            if (cloud.x < -100) {
+                                cloud.x = w + 100;
+                                cloud.y = Math.random() * h * 0.8;
+                            }
+                        }
+                    });
+
+                    if (gameState === 'IN_FLIGHT') offsetRef.current = (offsetRef.current + (2 * multiplier)) % 50;
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+                    for (let i = -offsetRef.current; i < w + 50; i += 50) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke(); }
+                    for (let i = offsetRef.current; i < h + 50; i += 50) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke(); }
+
+                    if (gameState === 'IN_FLIGHT' || gameState === 'CRASHED') {
+                        const elapsed = (Date.now() - startTimeRef.current) / 1000;
+                        const takeoffDuration = 3.5;
+                        const progress = Math.min(elapsed / takeoffDuration, 1);
+                        const targetX = w * 0.75;
+                        const targetY = h * 0.4;
+                        let x = 50 + (targetX - 50) * progress;
+                        let y = (h - 50) - (h - 50 - targetY) * Math.pow(progress, 2.2);
+                        if (progress >= 1) {
+                            // Infinity-like bobbing loop
+                            x += Math.sin(elapsed * 1.2) * 15;
+                            y += Math.cos(elapsed * 1.5) * 15;
+                        }
+
+                        if (gameState === 'IN_FLIGHT') {
+                            trail.push({x, y});
+                            if (trail.length > 50) trail.shift();
+                        }
+
+                        if (trail.length > 1) {
+                            ctx.beginPath(); ctx.strokeStyle = 'rgba(225, 29, 72, 0.3)'; ctx.lineWidth = 3;
+                            ctx.moveTo(trail[0].x, trail[0].y);
+                            for (let i = 1; i < trail.length; i++) ctx.lineTo(trail[i].x, trail[i].y);
+                            ctx.stroke();
+                        }
+
+                        const angle = progress < 1 
+                            ? -Math.PI / 12 - (Math.PI / 10 * Math.pow(progress, 1.5)) 
+                            : -Math.PI / 20 + Math.sin(elapsed) * 0.03;
+
+                        if (gameState === 'IN_FLIGHT') {
+                            const rad = angle;
+                            const exX = x - Math.cos(rad) * 50;
+                            const exY = y - Math.sin(rad) * 50;
+                            particlesRef.current.push({ x: exX, y: exY, size: 2 + Math.random() * 4, life: 1, type: 'exhaust' });
+                        } else if (gameState === 'CRASHED') {
+                            const crashElapsed = (Date.now() - crashTimeRef.current) / 1000;
+                            if (crashElapsed < 1.5) {
+                                // Massive explosion effect
+                                for (let i = 0; i < 15; i++) {
+                                    particlesRef.current.push({ 
+                                        x: x + (Math.random() - 0.5) * 60, 
+                                        y: y + (Math.random() - 0.5) * 60, 
+                                        size: 10 + Math.random() * 20, 
+                                        life: 1, 
+                                        type: Math.random() > 0.4 ? 'fire' : 'smoke' 
+                                    });
+                                }
+                                // Add some "sparks" or debris
+                                for (let i = 0; i < 8; i++) {
+                                    particlesRef.current.push({ 
+                                        x: x, 
+                                        y: y, 
+                                        size: 2 + Math.random() * 4, 
+                                        life: 1.5, 
+                                        type: 'fire' 
+                                    });
+                                }
+                            }
+                        }
+
+                        particlesRef.current.forEach((p, i) => {
+                            if (p.type === 'exhaust') {
+                                ctx.fillStyle = `rgba(255, 255, 255, ${p.life * 0.4})`;
+                            } else if (p.type === 'fire') {
+                                // Glow effect for fire
+                                ctx.shadowBlur = 15;
+                                ctx.shadowColor = 'rgba(249, 115, 22, 0.8)';
+                                ctx.fillStyle = `rgba(249, 115, 22, ${p.life})`;
+                            } else {
+                                ctx.shadowBlur = 0;
+                                ctx.fillStyle = `rgba(71, 85, 105, ${p.life * 0.8})`;
+                            }
+
+                            ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+                            ctx.shadowBlur = 0; // Reset shadow
+                            
+                            if (p.type === 'exhaust') {
+                                p.x -= 2 * multiplier;
+                            } else {
+                                p.x += (Math.random() - 0.5) * 4;
+                                p.y -= Math.random() * 2;
+                            }
+                            
+                            p.life -= 0.02;
+                            if (p.life <= 0) particlesRef.current.splice(i, 1);
+                        });
+
+                        ctx.save();
+                        ctx.translate(x, y);
+                        if (gameState === 'CRASHED') {
+                            const crashElapsed = (Date.now() - crashTimeRef.current) / 1000;
+                            // The plane disappears quickly into the explosion
+                            if (crashElapsed > 0.15) {
+                                ctx.restore();
+                                animationFrame = requestAnimationFrame(render);
+                                return;
+                            }
+                            ctx.rotate(angle);
+                            // Brief flash/expansion effect
+                            const scale = 1 + crashElapsed * 3;
+                            ctx.scale(scale, scale);
+                            ctx.globalAlpha = Math.max(0, 1 - crashElapsed * 7);
+                        } else {
+                            ctx.rotate(angle);
+                        }
+
+                        if (planeImgRef.current && planeImgRef.current.complete) {
+                            // Draw the jet image (JPEG with white background)
+                            ctx.save();
+                            
+                            // Flip horizontally because the original image points left
+                            ctx.scale(-1, 1);
+                            
+                            // Use multiply to remove white background from the JPEG
+                            ctx.globalCompositeOperation = 'multiply';
+                            
+                            // Adjusting size and position for the blue/yellow jet fighter
+                            ctx.drawImage(planeImgRef.current, -80, -60, 160, 120);
+                            ctx.restore();
+                        } else {
+                            // High-quality Jet Fallback (if image fails to load)
+                            ctx.save();
+                            
+                            // Engine Glow (Back)
+                            const engineGrad = ctx.createRadialGradient(-45, 0, 0, -45, 0, 20);
+                            engineGrad.addColorStop(0, '#ff6600');
+                            engineGrad.addColorStop(1, 'transparent');
+                            ctx.fillStyle = engineGrad;
+                            ctx.beginPath();
+                            ctx.arc(-45, 0, 20, 0, Math.PI * 2);
+                            ctx.fill();
+
+                            // Jet Body (Fuselage)
+                            const bodyGrad = ctx.createLinearGradient(0, -15, 0, 15);
+                            bodyGrad.addColorStop(0, '#f43f5e'); // rose-500
+                            bodyGrad.addColorStop(1, '#9f1239'); // rose-900
+                            ctx.fillStyle = bodyGrad;
+                            ctx.beginPath();
+                            ctx.moveTo(-50, 0);
+                            ctx.quadraticCurveTo(-45, -15, 0, -15);
+                            ctx.lineTo(40, -5);
+                            ctx.quadraticCurveTo(55, 0, 40, 5);
+                            ctx.lineTo(0, 15);
+                            ctx.quadraticCurveTo(-45, 15, -50, 0);
+                            ctx.fill();
+                            
+                            // Wings (Swept back)
+                            ctx.fillStyle = '#e11d48'; // rose-600
+                            ctx.beginPath();
+                            ctx.moveTo(-10, 0);
+                            ctx.lineTo(-35, -35);
+                            ctx.lineTo(-15, -35);
+                            ctx.lineTo(15, 0);
+                            ctx.closePath();
+                            ctx.fill();
+
+                            ctx.beginPath();
+                            ctx.moveTo(-10, 0);
+                            ctx.lineTo(-35, 35);
+                            ctx.lineTo(-15, 35);
+                            ctx.lineTo(15, 0);
+                            ctx.closePath();
+                            ctx.fill();
+                            
+                            // Tail Fin
+                            ctx.fillStyle = '#be123c'; // rose-700
+                            ctx.beginPath();
+                            ctx.moveTo(-35, 0);
+                            ctx.lineTo(-55, -25);
+                            ctx.lineTo(-40, -25);
+                            ctx.lineTo(-25, 0);
+                            ctx.closePath();
+                            ctx.fill();
+                            
+                            // Cockpit (Glass)
+                            const glassGrad = ctx.createLinearGradient(0, -10, 0, 0);
+                            glassGrad.addColorStop(0, '#bae6fd'); // sky-200
+                            glassGrad.addColorStop(1, '#0ea5e9'); // sky-500
+                            ctx.fillStyle = glassGrad;
+                            ctx.beginPath();
+                            ctx.ellipse(20, -4, 15, 7, 0, 0, Math.PI * 2);
+                            ctx.fill();
+                            
+                            ctx.restore();
+                        }
+                        ctx.restore();
+                    }
+                    ctx.restore();
+                    animationFrame = requestAnimationFrame(render);
+                };
+                render();
+                return () => cancelAnimationFrame(animationFrame);
+            }, [gameState, multiplier, shake]);
+
+            return React.createElement('div', { className: "h-[100dvh] flex flex-col" },
+                React.createElement('header', { className: "flex items-center justify-between px-4 py-2 bg-[#141414] border-b border-white/5" },
+                    React.createElement('span', { className: "font-black italic text-2xl text-rose-500 uppercase" }, "Aviator"),
+                    React.createElement('div', { className: "bg-black px-4 py-1 rounded-full border border-emerald-500/30 text-emerald-400 font-bold" }, balance.toFixed(2) + " USD")
+                ),
+                React.createElement('main', { className: "flex-1 flex flex-col lg:flex-row p-2 gap-2 overflow-hidden" },
+                    React.createElement('div', { className: "flex-1 flex flex-col gap-2 overflow-hidden" },
+                        React.createElement('div', { className: "bg-[#141414] p-1.5 rounded-xl border border-white/5 flex gap-2 overflow-x-auto no-scrollbar" },
+                            history.map((val, i) => React.createElement('span', { key: i, className: "px-2 py-0.5 rounded-full text-[9px] font-bold bg-rose-500/20 text-rose-400" }, val.toFixed(2) + "x"))
+                        ),
+                        React.createElement('div', { className: "relative flex-1 bg-sky-400 rounded-2xl border border-sky-600/30 overflow-hidden" },
+                            React.createElement('canvas', { ref: canvasRef, width: 800, height: 500, className: "w-full h-full bg-sky-400" }),
+                            React.createElement('div', { className: "absolute inset-0 flex flex-col items-center justify-center pointer-events-none pb-24" },
+                                gameState === 'WAITING' ? React.createElement('div', { className: "text-center" },
+                                    React.createElement('div', { className: "text-gray-500 text-xs font-bold uppercase mb-1" }, "Next Round In"),
+                                    React.createElement('div', { className: "text-6xl font-black italic" }, countdown.toFixed(1) + "s")
+                                ) : gameState === 'CRASHED' ? React.createElement('div', { className: "text-center animate-pulse-red" },
+                                    React.createElement('div', { className: "text-rose-500 text-4xl font-black italic uppercase mb-1" }, "Flew Away!"),
+                                    React.createElement('div', { className: "text-7xl font-black italic text-rose-500" }, multiplier.toFixed(2) + "x")
+                                ) : React.createElement('div', { className: "text-8xl font-black italic" }, multiplier.toFixed(2) + "x")
+                            ),
+                            React.createElement(AnimatePresence, null,
+                                cashOutPopup && React.createElement(motion.div, {
+                                    initial: { opacity: 0, y: 20 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0 },
+                                    className: "absolute top-10 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-6 py-3 rounded-2xl shadow-lg flex flex-col items-center z-50"
+                                },
+                                    React.createElement('div', { className: "text-xs font-bold uppercase opacity-80" }, "You Cashed Out!"),
+                                    React.createElement('div', { className: "text-2xl font-black italic" }, cashOutPopup.mult.toFixed(2) + "x"),
+                                    React.createElement('div', { className: "text-sm font-bold" }, "+" + cashOutPopup.amount.toFixed(2) + " USD")
+                                )
+                            )
+                        ),
+                        React.createElement('div', { className: "grid grid-cols-2 gap-2 shrink-0" },
+                            React.createElement(BetPanel, { bet: bet1, setBet: setBet1, onPlace: () => handlePlaceBet(1), onCashOut: () => handleCashOut(1), gameState, countdown, multiplier, quickAmounts: [100, 300, 700, 1000] }),
+                            React.createElement(BetPanel, { bet: bet2, setBet: setBet2, onPlace: () => handlePlaceBet(2), onCashOut: () => handleCashOut(2), gameState, countdown, multiplier, quickAmounts: [500, 1500, 2000, 2500, 5000] })
+                        )
+                    )
+                )
+            );
+        }
+
+        function BetPanel({ bet, setBet, onPlace, onCashOut, gameState, countdown, multiplier, quickAmounts }) {
+            const canBet = gameState === 'WAITING' && !bet.isPlaced && countdown > LOCKOUT_TIME;
+            const canCashOut = gameState === 'IN_FLIGHT' && bet.isPlaced && !bet.isCashedOut;
+
+            return React.createElement('div', { className: "bg-[#1b1b1b] p-3 rounded-2xl border border-white/5 flex flex-col gap-2" },
+                React.createElement('div', { className: "flex gap-2" },
+                    React.createElement('div', { className: "flex-1 flex flex-col gap-2 " + (bet.isPlaced ? 'opacity-50 pointer-events-none' : '') },
+                        React.createElement('div', { className: "bg-black/40 rounded-xl p-1 flex items-center justify-between border border-white/5" },
+                            React.createElement('button', { onClick: () => setBet(p => ({ ...p, amount: Math.max(0.1, p.amount - 1) })), className: "w-8 h-8 text-gray-400" }, "-"),
+                            React.createElement('input', { type: "number", value: bet.amount, readOnly: true, className: "bg-transparent text-center font-bold text-sm w-full outline-none" }),
+                            React.createElement('button', { onClick: () => setBet(p => ({ ...p, amount: p.amount + 1 })), className: "w-8 h-8 text-gray-400" }, "+")
+                        ),
+                        React.createElement('div', { className: "grid gap-1 " + (quickAmounts.length > 4 ? 'grid-cols-3' : 'grid-cols-2') },
+                            quickAmounts.map(a => React.createElement('button', { key: a, onClick: () => setBet(p => ({ ...p, amount: a })), className: "bg-black/20 text-[10px] font-bold py-1 rounded border border-white/5" }, a))
+                        )
+                    ),
+                    React.createElement('div', { className: "flex-1 min-h-[60px]" },
+                        canCashOut ? React.createElement('button', { onClick: onCashOut, className: "w-full h-full bg-orange-500 rounded-2xl flex flex-col items-center justify-center shadow-lg" },
+                            React.createElement('span', { className: "text-[10px] font-black uppercase italic" }, "Cash Out"),
+                            React.createElement('span', { className: "text-xl font-black italic" }, (bet.amount * multiplier).toFixed(2))
+                        ) : bet.isPlaced && gameState === 'WAITING' ? React.createElement('button', { onClick: () => setBet(p => ({ ...p, isPlaced: false, isAutoBet: false })), className: "w-full h-full bg-rose-500/20 border border-rose-500/50 rounded-2xl text-rose-500 font-bold" }, "Cancel")
+                        : React.createElement('button', { disabled: !canBet, onClick: onPlace, className: "w-full h-full rounded-2xl flex flex-col items-center justify-center " + (canBet ? 'bg-emerald-500' : 'bg-gray-700 opacity-50') },
+                            React.createElement('span', { className: "text-xl font-black italic uppercase" }, "Bet"),
+                            React.createElement('span', { className: "text-xs font-bold" }, bet.amount.toFixed(2))
+                        )
+                    )
+                ),
+                // Auto Options (Always Visible)
+                React.createElement('div', { className: "flex flex-col gap-3 p-3 bg-black/30 rounded-xl border border-white/5" },
+                    // Auto Bet Row
+                    React.createElement('div', { className: "flex items-center justify-between bg-white/5 p-2 rounded-lg" },
+                        React.createElement('div', { className: "flex flex-col" },
+                            React.createElement('span', { className: "text-[10px] font-black text-white uppercase tracking-wider" }, "Auto Bet"),
+                            React.createElement('span', { className: "text-[8px] text-gray-400" }, "Place bet automatically")
+                        ),
+                        React.createElement('button', { 
+                            onClick: () => setBet(p => ({ ...p, isAutoBet: !p.isAutoBet })), 
+                            className: "w-10 h-5 rounded-full relative transition-all " + (bet.isAutoBet ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-gray-700') 
+                        },
+                            React.createElement('div', { className: "absolute top-1 w-3 h-3 bg-white rounded-full transition-all " + (bet.isAutoBet ? 'left-6' : 'left-1') })
+                        )
+                    ),
+                    // Auto Cash Out Section
+                    React.createElement('div', { className: "flex flex-col gap-2 bg-white/5 p-2 rounded-lg" },
+                        React.createElement('div', { className: "flex items-center justify-between" },
+                            React.createElement('div', { className: "flex flex-col" },
+                                React.createElement('span', { className: "text-[10px] font-black text-white uppercase tracking-wider" }, "Auto Cash Out"),
+                                React.createElement('span', { className: "text-[8px] text-gray-400" }, "Cash out at multiplier")
+                            ),
+                            React.createElement('button', { 
+                                onClick: () => setBet(p => ({ ...p, isAutoCashOut: !p.isAutoCashOut })), 
+                                className: "w-10 h-5 rounded-full relative transition-all " + (bet.isAutoCashOut ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-gray-700') 
+                            },
+                                React.createElement('div', { className: "absolute top-1 w-3 h-3 bg-white rounded-full transition-all " + (bet.isAutoCashOut ? 'left-6' : 'left-1') })
+                            )
+                        ),
+                        React.createElement('div', { className: "flex flex-col gap-2 transition-all " + (!bet.isAutoCashOut ? 'opacity-30 pointer-events-none grayscale' : '') },
+                            React.createElement('div', { className: "flex items-center bg-black/60 rounded-xl p-1 border border-white/10" },
+                                React.createElement('button', { 
+                                    onClick: () => setBet(p => ({ ...p, autoCashOut: Math.max(1.01, parseFloat(((p.autoCashOut || 2.00) - 0.1).toFixed(2))) })), 
+                                    className: "w-10 h-10 flex items-center justify-center text-gray-400 hover:text-white" 
+                                }, "-"),
+                                React.createElement('div', { className: "flex-1 flex items-center justify-center gap-1" },
+                                    React.createElement('input', { 
+                                        type: "number", step: "0.01", value: bet.autoCashOut || '', placeholder: "2.00",
+                                        onChange: e => setBet(p => ({ ...p, autoCashOut: parseFloat(e.target.value) || null })), 
+                                        className: "bg-transparent text-center font-black text-lg w-full outline-none text-emerald-400" 
+                                    }),
+                                    React.createElement('span', { className: "text-xs font-black text-emerald-500 italic" }, "x")
+                                ),
+                                React.createElement('button', { 
+                                    onClick: () => setBet(p => ({ ...p, autoCashOut: parseFloat(((p.autoCashOut || 2.00) + 0.1).toFixed(2)) })), 
+                                    className: "w-10 h-10 flex items-center justify-center text-gray-400 hover:text-white" 
+                                }, "+")
+                            ),
+                            // Quick Multipliers
+                            React.createElement('div', { className: "grid grid-cols-4 gap-1" },
+                                [1.5, 2.0, 5.0, 10.0].map(m => React.createElement('button', {
+                                    key: m, onClick: () => setBet(p => ({ ...p, autoCashOut: m })),
+                                    className: "py-1.5 rounded-lg text-[10px] font-black transition-all border " + (bet.autoCashOut === m ? 'bg-emerald-500 border-emerald-400 text-white' : 'bg-black/40 border-white/5 text-gray-400 hover:bg-black/60')
+                                }, m.toFixed(1) + 'x'))
+                            )
+                        )
+                    )
+                )
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>

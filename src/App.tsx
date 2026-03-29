@@ -516,7 +516,7 @@ export default function App() {
   const handleDownloadHTML = async () => {
     try {
       const baseUrl = window.location.origin;
-      const response = await fetch(`${baseUrl}/aviator_standalone.html`);
+      const response = await fetch(`${baseUrl}/aviator_final.html`);
       if (!response.ok) throw new Error('File not found');
       const text = await response.text();
       const blob = new Blob([text], { type: 'text/html' });
@@ -543,7 +543,18 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-2 sm:gap-4">
-          <div className="bg-[#000] px-3 sm:px-4 py-1 rounded-full border border-emerald-500/30 flex items-center gap-2">
+          <div className="flex flex-col items-end">
+            <button 
+              onClick={handleDownloadHTML}
+              className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg transition-all transform hover:scale-105 shadow-lg shadow-rose-500/20 flex items-center gap-2 border border-rose-400/30"
+              title="Download 100% Working Game for GitHub"
+            >
+              <Download className="w-5 h-5 animate-bounce" />
+              <span className="font-black uppercase tracking-tighter text-sm">Download for GitHub</span>
+            </button>
+            <span className="text-[10px] text-rose-400 font-bold mt-1 animate-pulse">100% WORKING SOLUTION</span>
+          </div>
+          <div className="bg-[#000] px-3 sm:px-4 py-1.5 rounded-full border border-emerald-500/30 flex items-center gap-2 shadow-inner shadow-emerald-500/10">
             <span className="text-emerald-400 font-bold text-sm sm:text-base tracking-tight">{balance.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</span>
           </div>
         </div>
